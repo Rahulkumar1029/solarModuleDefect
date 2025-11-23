@@ -1,110 +1,77 @@
-from typing import Any, Optional
+"""Simple training script that downloads Ultralytics' YOLOv11 and fine-tunes it on your dataset.
 
-import hydra
-import lightning as L
-from lightning import Callback, LightningDataModule, LightningModule, Trainer
-from lightning.pytorch.loggers import Logger
-from omegaconf import DictConfig
+This script is intentionally small and self-contained. It expects your dataset `data.yaml`
+to live at `src/data/files/data.yaml` (the Roboflow-style YAML already present in the repo).
 
-from solarModuleDefect.utils import (
-    RankedLogger,
-    extras,
-    get_metric_value,
-    instantiate_callbacks,
-    instantiate_loggers,
-    log_hyperparameters,
-    task_wrapper,
-)
+Usage (PowerShell):
+    C:/path/to/venv/Scripts/python.exe src/scripts/train.py --epochs 10 --imgsz 1024 --batch 8
+"""
+from __future__ import annotations
 
-log = RankedLogger(__name__, rank_zero_only=True)
+import argparse
+import subprocess
+import sys
+from pathlib import Path
+
+import torch
 
 
-@task_wrapper
-def train(cfg: DictConfig) -> tuple[dict[str, Any], dict[str, Any]]:
-    """Trains the model. Can additionally evaluate on a testset, using best weights obtained during
-    training.
+def ensure_ultralytics():
+    try:
+        from ultralytics import YOLO  # type: ignore
 
-    This method is wrapped in optional @task_wrapper decorator, that controls the behavior during
-    failure. Useful for multiruns, saving info about the crash, etc.
+        return YOLO
+    except Exception:
+        print('`ultralytics` not found, attempting to install via pip...')
+        subprocess.check_call([sys.executable, '-m', 'pip', 'install', '--upgrade', 'ultralytics'])
+        try:
+            from ultralytics import YOLO  # type: ignore
 
-    :param cfg: A DictConfig configuration composed by Hydra.
-    :return: A tuple with metrics and dict with all instantiated objects.
-    """
-    # set seed for random number generators in pytorch, numpy and python.random
-    if cfg.get("seed"):
-        L.seed_everything(cfg.seed, workers=True)
-
-    log.info(f"Instantiating datamodule <{cfg.data._target_}>")
-    datamodule: LightningDataModule = hydra.utils.instantiate(cfg.data)
-
-    log.info(f"Instantiating model <{cfg.model._target_}>")
-    model: LightningModule = hydra.utils.instantiate(cfg.model)
-
-    log.info("Instantiating callbacks...")
-    callbacks: list[Callback] = instantiate_callbacks(cfg.get("callbacks"))
-
-    log.info("Instantiating loggers...")
-    logger: list[Logger] = instantiate_loggers(cfg.get("logger"))
-
-    log.info(f"Instantiating trainer <{cfg.trainer._target_}>")
-    trainer: Trainer = hydra.utils.instantiate(cfg.trainer, callbacks=callbacks, logger=logger)
-
-    object_dict = {
-        "cfg": cfg,
-        "datamodule": datamodule,
-        "model": model,
-        "callbacks": callbacks,
-        "logger": logger,
-        "trainer": trainer,
-    }
-
-    if logger:
-        log.info("Logging hyperparameters!")
-        log_hyperparameters(object_dict)
-
-    if cfg.get("train"):
-        log.info("Starting training!")
-        trainer.fit(model=model, datamodule=datamodule, ckpt_path=cfg.get("ckpt_path"))
-
-    train_metrics = trainer.callback_metrics
-
-    if cfg.get("test"):
-        log.info("Starting testing!")
-        ckpt_path = trainer.checkpoint_callback.best_model_path
-        if ckpt_path == "":
-            log.warning("Best ckpt not found! Using current weights for testing...")
-            ckpt_path = None
-        trainer.test(model=model, datamodule=datamodule, ckpt_path=ckpt_path)
-        log.info(f"Best ckpt path: {ckpt_path}")
-
-    test_metrics = trainer.callback_metrics
-
-    # merge train and test metrics
-    metric_dict = {**train_metrics, **test_metrics}
-
-    return metric_dict, object_dict
+            return YOLO
+        except Exception as e:
+            print('Failed to import ultralytics after installation:', e)
+            raise
 
 
-@hydra.main(version_base="1.3", config_path="../configs", config_name="train.yaml")
-def main(cfg: DictConfig) -> Optional[float]:
-    """Main entry point for training.
-
-    :param cfg: DictConfig configuration composed by Hydra.
-    :return: Optional[float] with optimized metric value.
-    """
-    # apply extra utilities
-    # (e.g. ask for tags if none are provided in cfg, print cfg tree, etc.)
-    extras(cfg)
-
-    # train the model
-    metric_dict, _ = train(cfg)
-
-    # safely retrieve metric value for hydra-based hyperparameter optimization
-    metric_value = get_metric_value(metric_dict=metric_dict, metric_name=cfg.get("optimized_metric"))
-
-    # return optimized metric
-    return metric_value
+def find_data_yaml() -> Path:
+    # locate repo root (two parents up from this script: src/scripts -> repo)
+    root = Path(__file__).resolve().parents[1]
+    candidates = [root / 'src' / 'data' / 'files' / 'data.yaml', root / 'data' / 'files' / 'data.yaml']
+    for p in candidates:
+        if p.exists():
+            return p
+    raise FileNotFoundError('data.yaml not found in expected locations: ' + ', '.join(map(str, candidates)))
 
 
-if __name__ == "__main__":
+def main():
+    parser = argparse.ArgumentParser(description='Train Ultralytics YOLOv8 on repository dataset')
+    parser.add_argument('--model', type=str, default='yolov8s.pt', help='Ultralytics model spec or weights (e.g. yolov8s.pt)')
+    parser.add_argument('--epochs', type=int, default=10)
+    parser.add_argument('--imgsz', type=int, default=1024)
+    parser.add_argument('--batch', type=int, default=8)
+    parser.add_argument('--device', type=str, default=None, help="'cpu' or GPU id (e.g. 0) - default: auto")
+    args = parser.parse_args()
+
+    data_yaml = find_data_yaml()
+    print('Using dataset yaml:', data_yaml)
+
+    YOLO = ensure_ultralytics()
+
+    # decide device
+    if args.device is None:
+        device_arg = 0 if (torch.cuda.is_available() and torch.cuda.device_count() > 0) else 'cpu'
+    else:
+        device_arg = args.device
+
+    print(f'Using model spec: {args.model}')
+    print(f'epochs={args.epochs}, imgsz={args.imgsz}, batch={args.batch}, device={device_arg}')
+
+    # instantiate and run training (Ultralytics will download weights if needed)
+    yolo = YOLO(args.model)
+    print('Starting Ultralytics training...')
+    yolo.train(data=str(data_yaml), epochs=args.epochs, imgsz=args.imgsz, batch=args.batch, device=device_arg)
+    print('Training finished.')
+
+
+if __name__ == '__main__':
     main()

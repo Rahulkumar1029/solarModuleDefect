@@ -1,3 +1,4 @@
 _target_: solarModuleDefect.models.yolov11_module.YOLOv11Module
-model_name: "yolov8n.pt"
+num_classes: 7
+img_size: 1024
 lr: 1e-3

@@ -160,6 +160,8 @@ src/data/
 # mkdocs documentation
 /site
 
+runs/
+
 # mypy
 .mypy_cache/
 .dmypy.json
