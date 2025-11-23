@@ -1,0 +1,7 @@
+_target_: solarModuleDefect.data.detection_datamodule.YOLODataModule
+data_yaml: ${paths.root_dir}/src/data/files/data.yaml
+img_size: 1024
+batch_size: 8
+num_workers: 4
+pin_memory: True
+

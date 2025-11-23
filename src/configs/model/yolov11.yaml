@@ -1,0 +1,3 @@
+_target_: solarModuleDefect.models.yolov11_module.YOLOv11Module
+model_name: "yolov8n.pt"
+lr: 1e-3
